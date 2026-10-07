@@ -103,7 +103,21 @@ Full schemas and examples: [`docs/COMMANDS.md`](docs/COMMANDS.md).
 
 ## Ribbon panel (optional, and inert on its own)
 
-Installing the add-in also adds **one ribbon tab, AutoAudit**, with a dockable panel.
+> **Fork `jr/sem-abas` (0.8.35-jr1): no ribbon tabs by default.** The add-in creates no
+> ribbon tab and does not register the AutoAudit pane unless you opt in. The extra pane
+> below is still registered (same pane id) whenever `revit-mcp-extra-panel.json` names a
+> URL — only its ribbon button is gone; show it by id
+> (`UIApplication.GetDockablePane(new DockablePaneId(new Guid("3F2A7C10-8D4B-4E96-B1A2-9C7E5D3160AF"))).Show()`).
+> The MCP HTTP server never depended on the ribbon and still starts on its own.
+>
+> To bring the tabs back (no rebuild), any one of:
+> - `"abas": true` in `revit-mcp-extra-panel.json` (or in `revit-mcp-panel.json`);
+> - env var `REVIT_MCP_ABAS=1` before starting Revit (wins over the files; `0` forces them off).
+>
+> `"autoaudit": true|false` (in either file) switches the AutoAudit pane on/off independently;
+> when absent it follows `abas`. Restart Revit after changing any of these.
+
+Upstream: installing the add-in also adds **one ribbon tab, AutoAudit**, with a dockable panel.
 It is not a feature of this add-in by itself: the panel is a WebView2 browser pointed
 at a local service, so with nothing listening on the port it shows a connection
 error. That is the service being absent, not the add-in being broken.

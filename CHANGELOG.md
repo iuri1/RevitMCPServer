@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.35-jr1] — 2026-10-07: no ribbon tabs by default (fork `jr/sem-abas`)
+
+### Changed
+
+- **Default = no ribbon tabs and no AutoAudit pane.** New `Panel/RibbonConfig.cs` resolves two
+  switches at startup: `Tabs` (env `REVIT_MCP_ABAS`, then `"abas"` in `revit-mcp-extra-panel.json`,
+  then in `revit-mcp-panel.json`, else false) and `AutoAudit` (`"autoaudit"` in either file, else
+  follows `Tabs`). `"abas": true` restores the 0.8.35 behaviour exactly.
+- The extra dockable pane (`revit-mcp-extra-panel.json`) is still registered in `OnStartup` with
+  the same `ExtraPaneProvider.PaneId` (3F2A7C10-…); only its ribbon tab/button is gated.
+- MCP HTTP server, port and token handling are untouched. 18 new unit tests (`RibbonConfigTests`).
+
 ## [0.8.35] — 2026-09-14: second ribbon panel is now opt-in
 
 ### Changed

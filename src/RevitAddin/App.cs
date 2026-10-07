@@ -65,25 +65,48 @@ public sealed class App : IExternalApplication
 
             LogToConsole($"[RevitMCP] Listening on http://127.0.0.1:{port}/ (auth=ON)");
 
-            // AutoAudit dockable panel (P3-4). Just a browser onto the AutoAudit
-            // UI URL — a failure here must NEVER take down the MCP server above,
-            // so it gets its own try/catch.
+            // Ribbon switches (jr fork): default = NO ribbon tabs and NO AutoAudit pane.
+            // "abas": true (revit-mcp-extra-panel.json / revit-mcp-panel.json) or
+            // REVIT_MCP_ABAS=1 brings the upstream tabs back. The MCP server above never
+            // depends on the ribbon — it is already listening at this point.
+            var ribbon = new RibbonSettings(Tabs: false, AutoAudit: false);
             try
             {
-                RegisterAutoAuditPanel(application, revitVersion);
+                ribbon = RibbonConfig.Resolve(revitVersion);
             }
             catch (Exception ex)
             {
-                LogToConsole($"[RevitMCP] AutoAudit panel unavailable: {ex.Message}");
+                LogToConsole($"[RevitMCP] Ribbon config unreadable, using defaults: {ex.Message}");
+            }
+            LogToConsole($"[RevitMCP] Ribbon: tabs={ribbon.Tabs}, autoaudit={ribbon.AutoAudit}");
+
+            // AutoAudit dockable panel (P3-4). Just a browser onto the AutoAudit
+            // UI URL — a failure here must NEVER take down the MCP server above,
+            // so it gets its own try/catch.
+            if (ribbon.AutoAudit)
+            {
+                try
+                {
+                    RegisterAutoAuditPanel(application, revitVersion, ribbon.Tabs);
+                }
+                catch (Exception ex)
+                {
+                    LogToConsole($"[RevitMCP] AutoAudit panel unavailable: {ex.Message}");
+                }
+            }
+            else
+            {
+                LogToConsole("[RevitMCP] AutoAudit panel disabled (\"autoaudit\"/\"abas\" not set) — skipped.");
             }
 
             // Optional second pane — same browser-only pattern, independent of AutoAudit (its
             // own try/catch: a failure of either pane must never take the MCP server, or the
             // other pane, down). Opt-in: registers only when revit-mcp-extra-panel.json names
-            // a URL, so a default install shows exactly one extra tab (AutoAudit).
+            // a URL. The PANE is always registered when configured (it is shown by id from
+            // outside, e.g. a pyRevit button); only its ribbon tab/button follows ribbon.Tabs.
             try
             {
-                RegisterExtraPanel(application, revitVersion);
+                RegisterExtraPanel(application, revitVersion, ribbon.Tabs);
             }
             catch (Exception ex)
             {
@@ -101,7 +124,7 @@ public sealed class App : IExternalApplication
     }
 
     private void RegisterAutoAuditPanel(
-        UIControlledApplication application, string revitVersion)
+        UIControlledApplication application, string revitVersion, bool createTab)
     {
         // Belt-and-braces: make sure our loose dependencies (the WebView2
         // managed assemblies deployed next to this dll) resolve from the
@@ -143,6 +166,8 @@ public sealed class App : IExternalApplication
         // browser already exists.
         application.ViewActivated += (_, _) => _panelView?.Resume();
 
+        if (!createTab) return;
+
         var tab = "AutoAudit";
         application.CreateRibbonTab(tab);
         var ribbonPanel = application.CreateRibbonPanel(tab, "AutoAudit");
@@ -158,7 +183,7 @@ public sealed class App : IExternalApplication
     }
 
     private void RegisterExtraPanel(
-        UIControlledApplication application, string revitVersion)
+        UIControlledApplication application, string revitVersion, bool createTab)
     {
         var settings = ExtraPanelConfig.Resolve(revitVersion);
         if (settings is null)
@@ -207,6 +232,14 @@ public sealed class App : IExternalApplication
         // through the dispatcher and EnsureWebViewCore returns early once the
         // browser already exists.
         application.ViewActivated += (_, _) => _extraPanelView?.Resume();
+
+        // No ribbon entry by default: the pane stays registered (same id) and is shown from
+        // outside via UIApplication.GetDockablePane(ExtraPaneProvider.PaneId).Show().
+        if (!createTab)
+        {
+            LogToConsole($"[RevitMCP] Extra panel '{settings.Label}' registered without ribbon tab.");
+            return;
+        }
 
         // Own ribbon tab by default — decoupled from AutoAudit's tab (either registration may
         // fail independently, so neither may assume the other created a tab). The config may
