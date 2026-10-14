@@ -87,7 +87,11 @@
     <!-- AutoAudit panel (P3-4). The WPF control needs the Evergreen WebView2
          Runtime on the machine (ships with Windows 11 / Edge); when absent the
          panel degrades to an "open in browser" fallback - never a crash. -->
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <!-- Revit 2025 loads its own Microsoft.Web.WebView2 1.0.2045.28 into the shared load context (no add-in
+         isolation before 2026): compile against that exact version there, or the first newer-only call
+         (GetAvailableBrowserVersionString overload) throws MissingMethodException. 2026+ isolates add-ins. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2045.28" Condition="'$(RevitVersion)' == '2025'" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" Condition="'$(RevitVersion)' != '2025'" />
   </ItemGroup>
 
   <!-- Stamp the actual git commit / branch / dirty-state and a build timestamp
