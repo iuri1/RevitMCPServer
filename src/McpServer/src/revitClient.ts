@@ -4,11 +4,16 @@
  * Auth: reads the auth token from REVIT_MCP_AUTH_TOKEN env var or from the
  * well-known file at %APPDATA%/Autodesk/Revit/Addins/<version>/revit-mcp-token.txt.
  *
- * On 401 responses the client automatically re-reads the token file once (Revit
- * regenerates the token on restart) and retries the request.
+ * On 401 responses the client re-reads the token files (Revit regenerates the
+ * token on restart) and retries.  Each Revit year's addin writes its own token
+ * into Addins/<year>/, but they all compete for the same port, so the process
+ * answering may not be the one REVIT_MCP_VERSION names (e.g. VERSION=2026 while
+ * only Revit 2025 is open).  The retry therefore walks every year's token file:
+ * configured year first, then the others newest-mtime first, and keeps the one
+ * the addin accepts.
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "node:crypto";
 
@@ -27,9 +32,9 @@ if (!LOOPBACK_HOSTS.has(RAW_HOST)) {
 }
 const REVIT_HOST = RAW_HOST === "::1" ? "[::1]" : RAW_HOST;
 const REVIT_VERSION = process.env.REVIT_MCP_VERSION ?? "2026";
-// Auto-assign port by version: 2026 → 7891, 2027 → 7892, …
-// Explicit REVIT_MCP_PORT always wins.
-const DEFAULT_PORT = 7891 + (parseInt(REVIT_VERSION, 10) - 2026);
+// Auto-assign port by version: ≤2026 → 7891, 2027 → 7892, … (same rule as the
+// addin's App.ResolvePort).  Explicit REVIT_MCP_PORT always wins.
+const DEFAULT_PORT = 7891 + Math.max(0, (parseInt(REVIT_VERSION, 10) || 2026) - 2026);
 const REVIT_PORT = Number(process.env.REVIT_MCP_PORT ?? String(DEFAULT_PORT));
 const BASE = `http://${REVIT_HOST}:${REVIT_PORT}`;
 const TIMEOUT_MS = Number(process.env.REVIT_MCP_TIMEOUT_MS ?? "30000");
@@ -57,25 +62,57 @@ function resolveAuthToken(): string | undefined {
   const explicit = process.env.REVIT_MCP_AUTH_TOKEN;
   if (explicit) return explicit;
 
-  return readTokenFile();
+  // Configured year's file, or — if that Revit was never started — whichever
+  // other year's token is newest.
+  return candidateTokens()[0];
 }
 
+const addinsRoot = () =>
+  join(process.env.APPDATA ?? "", "Autodesk", "Revit", "Addins");
+const tokenPathFor = (year: string) =>
+  join(addinsRoot(), year, "revit-mcp-token.txt");
+
 /** Read the token from the well-known per-session file written by the addin. */
-function readTokenFile(): string | undefined {
+function readTokenFile(year: string = REVIT_VERSION): string | undefined {
   try {
-    const appData = process.env.APPDATA ?? "";
-    const tokenPath = join(
-      appData,
-      "Autodesk",
-      "Revit",
-      "Addins",
-      REVIT_VERSION,
-      "revit-mcp-token.txt",
-    );
-    return readFileSync(tokenPath, "utf-8").trim() || undefined;
+    return readFileSync(tokenPathFor(year), "utf-8").trim() || undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Every distinct token on disk, in the order they should be tried: the
+ * configured REVIT_MCP_VERSION first, then the other Addins/<year>/ folders
+ * that hold a token file, most recently written first (the Revit started last
+ * is the most likely to own the port).
+ */
+function candidateTokens(): string[] {
+  let years: string[] = [];
+  try {
+    years = readdirSync(addinsRoot()).filter((d) => /^\d{4}$/.test(d));
+  } catch {
+    // No Addins folder: only the configured year (below) can apply.
+  }
+  const others = years
+    .filter((y) => y !== REVIT_VERSION)
+    .map((y) => {
+      try {
+        return { y, mtime: statSync(tokenPathFor(y)).mtimeMs };
+      } catch {
+        return undefined; // folder without a token file
+      }
+    })
+    .filter((e): e is { y: string; mtime: number } => e !== undefined)
+    .sort((a, b) => b.mtime - a.mtime)
+    .map((e) => e.y);
+
+  const tokens: string[] = [];
+  for (const y of [REVIT_VERSION, ...others]) {
+    const t = readTokenFile(y);
+    if (t && !tokens.includes(t)) tokens.push(t);
+  }
+  return tokens;
 }
 
 // Mutable — refreshed automatically on 401 (Revit regenerates token on restart).
@@ -85,25 +122,47 @@ export function hasAuthToken(): boolean {
   return _authToken !== undefined;
 }
 
-export function buildHeaders(): Record<string, string> {
+export function buildHeaders(token: string | undefined = _authToken): Record<string, string> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
   };
-  if (_authToken) {
-    headers["authorization"] = `Bearer ${_authToken}`;
+  if (token) {
+    headers["authorization"] = `Bearer ${token}`;
   }
   return headers;
 }
 
-async function postJson(
+const isUnauthorized = (e: RevitEnvelope) => e.error?.code === "unauthorized";
+
+async function postJson(path: string, body: unknown): Promise<RevitEnvelope> {
+  const first = await sendOnce(path, body, _authToken);
+  if (!isUnauthorized(first)) return first;
+
+  // 401: the token is stale (Revit restarted) or belongs to another Revit year
+  // than the one holding the port.  The addin rejects before executing, so
+  // resending is safe.  Try each other token on disk; remember the winner.
+  let last = first;
+  for (const token of candidateTokens()) {
+    if (token === _authToken) continue;
+    last = await sendOnce(path, body, token);
+    if (!isUnauthorized(last)) {
+      _authToken = token;
+      return last;
+    }
+  }
+  return last;
+}
+
+/** One HTTP round trip to the addin with the given bearer token. */
+async function sendOnce(
   path: string,
   body: unknown,
-  _retried = false,
+  token: string | undefined,
 ): Promise<RevitEnvelope> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const headers = buildHeaders();
+    const headers = buildHeaders(token);
     headers["x-request-id"] = randomUUID();
     const res = await fetch(`${BASE}${path}`, {
       method: "POST",
@@ -123,16 +182,6 @@ async function postJson(
           message: `Non-JSON response from Revit addin (status ${res.status}): ${text.slice(0, 500)}`,
         },
       };
-    }
-
-    // On 401, try refreshing the token from disk once — Revit regenerates it
-    // on restart and env-var tokens might be stale.
-    if (!_retried && envelope.error?.code === "unauthorized") {
-      const fresh = readTokenFile();
-      if (fresh && fresh !== _authToken) {
-        _authToken = fresh;
-        return postJson(path, body, true);
-      }
     }
 
     return envelope;

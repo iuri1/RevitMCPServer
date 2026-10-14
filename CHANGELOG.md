@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.35-jr3] — 2026-10-14: MCP server finds the token of whichever Revit year is open
+
+### Fixed
+
+- **`unauthorized` when the open Revit is not `REVIT_MCP_VERSION`.** Each year's addin writes its
+  own `Addins/<year>/revit-mcp-token.txt` but they share port 7891, so with `VERSION=2026` and only
+  Revit 2025 open (or both open and 2025 holding the port) every call failed. On 401 the server now
+  retries with every token file on disk — configured year first, then the other years newest-mtime
+  first — and keeps the one the addin accepts. A missing configured-year file at startup falls back
+  the same way. `REVIT_MCP_AUTH_TOKEN` and the loopback-only host check are unchanged.
+- Default port for `REVIT_MCP_VERSION` < 2026 is 7891 (was 7890), matching `App.ResolvePort`.
+- 4 new unit tests (temp `APPDATA` + mocked `fetch`). Addin binaries unchanged.
+
 ## [0.8.35-jr1] — 2026-10-07: no ribbon tabs by default (fork `jr/sem-abas`)
 
 ### Changed

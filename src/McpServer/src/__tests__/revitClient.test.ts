@@ -220,3 +220,108 @@ describe('REVIT_MCP_HOST loopback clamp', () => {
     await expect(import('../revitClient.js')).resolves.toBeDefined();
   });
 });
+
+// ── multi-year token fallback ─────────────────────────────────────────────────
+// Revit 2025 and 2026 each write their own Addins/<year>/revit-mcp-token.txt but
+// share the port; the client must find whichever token the running addin accepts.
+
+describe('token fallback across Revit years', () => {
+  let appData: string;
+
+  async function writeToken(year: string, token: string, mtimeSec: number) {
+    const { mkdirSync, writeFileSync, utimesSync } = await import('fs');
+    const { join } = await import('path');
+    const dir = join(appData, 'Autodesk', 'Revit', 'Addins', year);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'revit-mcp-token.txt');
+    writeFileSync(file, token + '\r\n');
+    utimesSync(file, mtimeSec, mtimeSec);
+  }
+
+  /** fetch mock: 200 only for `goodToken`, 401 envelope otherwise. */
+  function addinAccepting(goodToken: string) {
+    return vi.fn(async (_url: unknown, opts: RequestInit) => {
+      const auth = (opts.headers as Record<string, string>)['authorization'];
+      const ok = auth === `Bearer ${goodToken}`;
+      const body = ok
+        ? { ok: true, data: 'pong' }
+        : { ok: false, error: { code: 'unauthorized', message: 'bad token' } };
+      return { status: ok ? 200 : 401, text: async () => JSON.stringify(body) } as unknown as Response;
+    });
+  }
+
+  const sentTokens = (f: ReturnType<typeof vi.fn>) =>
+    f.mock.calls.map(([, o]) => ((o as RequestInit).headers as Record<string, string>)['authorization']);
+
+  beforeEach(async () => {
+    const { mkdtempSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    appData = mkdtempSync(join(tmpdir(), 'revit-mcp-test-'));
+    vi.stubEnv('APPDATA', appData);
+    vi.stubEnv('REVIT_MCP_AUTH_TOKEN', '');
+    vi.resetModules();
+  });
+  afterEach(async () => {
+    const { rmSync } = await import('fs');
+    rmSync(appData, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('VERSION=2026 but only Revit 2025 has a token: starts with the 2025 token', async () => {
+    vi.stubEnv('REVIT_MCP_VERSION', '2026');
+    await writeToken('2025', 'tok-2025', 1000);
+    const f = addinAccepting('tok-2025');
+    vi.stubGlobal('fetch', f);
+    const { callRevit, hasAuthToken } = await import('../revitClient.js');
+    expect(hasAuthToken()).toBe(true);
+    const r = await callRevit('ping', {});
+    expect(r.ok).toBe(true);
+    expect(sentTokens(f)).toEqual(['Bearer tok-2025']);
+  });
+
+  it('on 401 tries the other years (configured first, then newest) and remembers the winner', async () => {
+    vi.stubEnv('REVIT_MCP_VERSION', '2026');
+    await writeToken('2026', 'tok-2026', 3000); // stale: Revit 2026 closed
+    await writeToken('2027', 'tok-2027', 1000); // older
+    await writeToken('2025', 'tok-2025', 2000); // newer than 2027 -> tried before it
+    const f = addinAccepting('tok-2025');
+    vi.stubGlobal('fetch', f);
+    const { callRevit } = await import('../revitClient.js');
+
+    const r1 = await callRevit('ping', {});
+    expect(r1.ok).toBe(true);
+    expect(sentTokens(f)).toEqual(['Bearer tok-2026', 'Bearer tok-2025']);
+
+    // Second call goes straight to the token that worked.
+    f.mockClear();
+    const r2 = await callRevit('ping', {});
+    expect(r2.ok).toBe(true);
+    expect(sentTokens(f)).toEqual(['Bearer tok-2025']);
+  });
+
+  it('returns unauthorized after every token on disk was rejected', async () => {
+    vi.stubEnv('REVIT_MCP_VERSION', '2026');
+    await writeToken('2026', 'tok-2026', 2000);
+    await writeToken('2025', 'tok-2025', 1000);
+    const f = addinAccepting('nobody-has-this');
+    vi.stubGlobal('fetch', f);
+    const { callRevit } = await import('../revitClient.js');
+    const r = await callRevit('ping', {});
+    expect(r.error?.code).toBe('unauthorized');
+    expect(sentTokens(f)).toEqual(['Bearer tok-2026', 'Bearer tok-2025']);
+  });
+
+  it('a stale REVIT_MCP_AUTH_TOKEN still falls back to the token files', async () => {
+    vi.stubEnv('REVIT_MCP_AUTH_TOKEN', 'env-token');
+    await writeToken('2025', 'tok-2025', 1000);
+    const f = addinAccepting('tok-2025');
+    vi.stubGlobal('fetch', f);
+    const { callRevit } = await import('../revitClient.js');
+    const r = await callRevit('ping', {});
+    expect(r.ok).toBe(true);
+    expect(sentTokens(f)).toEqual(['Bearer env-token', 'Bearer tok-2025']);
+  });
+});
