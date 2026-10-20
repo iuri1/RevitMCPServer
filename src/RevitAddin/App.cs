@@ -49,10 +49,14 @@ public sealed class App : IExternalApplication
 
             var revitVersion = application.ControlledApplication.VersionNumber;
             var port = ResolvePort(revitVersion);
-            var authToken = ResolveAuthToken(revitVersion);
+            var authToken = GenerateAuthToken();
 
             _httpServer = new McpHttpServer(port, _handler, authToken);
             _httpServer.Start();
+            // jr fork: the token file is written ONLY after this Revit owns the port. A second Revit of the same
+            // year (e.g. a headless/background one) used to overwrite the file and then fail to listen, leaving
+            // the running Revit unreachable ("unauthorized") until it was restarted (Bis demo, 2026-10-20).
+            WriteAuthToken(revitVersion, authToken);
 
             // Log the actual build so the Revit journal / DebugView shows which dll
             // was loaded — the fastest way to spot a stale dll shadowing a newer one
@@ -298,14 +302,17 @@ public sealed class App : IExternalApplication
     /// escape hatch was removed in 0.8.17: the listener is loopback-only, but an
     /// unauthenticated loopback port would still let any local process drive Revit).
     /// </summary>
-    private static string ResolveAuthToken(string revitVersion)
+    private static string GenerateAuthToken()
     {
         // Generate a cryptographically secure random token.
         var bytes = new byte[32];
         using (var rng = RandomNumberGenerator.Create())
             rng.GetBytes(bytes);
-        var token = Convert.ToBase64String(bytes);
+        return Convert.ToBase64String(bytes);
+    }
 
+    private static void WriteAuthToken(string revitVersion, string token)
+    {
         // Write to a well-known location so the MCP server can read it.
         try
         {
@@ -320,8 +327,6 @@ public sealed class App : IExternalApplication
         {
             LogToConsole($"[RevitMCP] Warning: could not write auth token file: {ex.Message}");
         }
-
-        return token;
     }
 
     private static void LogToConsole(string message)
