@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — piloto Bis 2.0: rotas JRTools em C# (branch `piloto-rotas-csharp`)
+
+### Added
+
+- **`tx_seguro` per call** for any model-write command: reserved params key `tx_seguro` (`true` or
+  `{nome, resolver_contem}`) runs the command in a STRICT transaction — warnings dismissed, any error rolls back
+  WITHOUT a Revit dialog, messages returned in `falhas`; payload `{status, falhas, resultado,
+  resultado_descartado}` exactly like the JRTools route. Decision logic in `TxSeguroPolicy.cs` (pure, tested),
+  Revit adapter in `TxSeguro.cs`. Refused (`bad_request`) on read/UI commands and inside `batch`. Without the key
+  nothing changes.
+- **13 commands ported from the JRTools pyRevit routes**, same names / snake_case arguments / payload:
+  `create_drafting_view`, `set_view_scale`, `set_viewport_centers`, `viewport_boxes`, `place_schedule_on_sheet`,
+  `rooms_bbox`, `room_areas`, `element_bbox_m`, `dims_list`, `set_annotation_crop`, `rename_views`,
+  `list_text_types`, `list_filled_region_types` (+ MCP tools `revit_<name>`). Python-compatible units/rounding in
+  `RouteCompat.cs`. Equivalence table for the 9 commands that already existed: `docs/MIGRACAO_ROTAS_CSHARP.md`.
+- 65 new unit tests (`TxSeguroPolicyTests`, `RouteCompatTests`, `PortedRoutesRegistryTests`). 114 C# commands,
+  107 MCP tools. Existing commands unchanged.
+
 ## [0.8.35-jr3] — 2026-10-14: MCP server finds the token of whichever Revit year is open
 
 ### Fixed
