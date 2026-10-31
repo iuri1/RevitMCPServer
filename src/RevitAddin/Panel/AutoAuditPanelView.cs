@@ -35,6 +35,13 @@ public sealed class AutoAuditPanelView : UserControl
     private WebView2? _webView;
     private bool _suspended;
     private readonly string _label;
+    // jr fork: the pane waits for (and may start) its local service instead of showing the
+    // browser's "can't connect" page — see Connect()/OnNavigationCompleted.
+    private readonly LocalServiceLauncher? _launcher;
+    private readonly string _waiting;
+    private System.Windows.Threading.DispatcherTimer? _poll;
+    private int _pollTicks;
+    private bool _navigatingToService;
 
     public AutoAuditPanelView(string revitVersion)
         : this(PanelConfig.ResolveUrl(revitVersion),
@@ -57,10 +64,23 @@ public sealed class AutoAuditPanelView : UserControl
     /// them at AutoAudit while showing a different service entirely.
     /// </param>
     public AutoAuditPanelView(string url, string userDataFolder, string label)
+        : this(url, userDataFolder, label, null, null)
+    {
+    }
+
+    /// <param name="launcher">
+    /// When given, a pane whose URL does not answer starts the service through it and shows a
+    /// waiting page until the URL answers (jr fork). Null = plain browser, as upstream.
+    /// </param>
+    /// <param name="waiting">Text of the waiting page; null = "Starting {label}…".</param>
+    internal AutoAuditPanelView(string url, string userDataFolder, string label,
+                                LocalServiceLauncher? launcher, string? waiting)
     {
         _url = url;
         _userDataFolder = userDataFolder;
         _label = label;
+        _launcher = launcher;
+        _waiting = waiting ?? $"Starting {label}…";
 
         // Explicit surface colors: the pane host gives WPF a transparent
         // backdrop that renders BLACK under Revit's dark theme — the first
@@ -118,7 +138,8 @@ public sealed class AutoAuditPanelView : UserControl
         var reload = new Button { Content = "Reload", Margin = new Thickness(0, 0, 4, 0), Padding = new Thickness(8, 2, 8, 2) };
         reload.Click += (_, _) =>
         {
-            if (_webView?.CoreWebView2 is not null) _webView.CoreWebView2.Reload();
+            // Connect() probes first: with the service down, a plain Reload only re-fails.
+            if (_webView?.CoreWebView2 is not null) Connect("reload button");
             else ForceRebuild();
         };
         var external = new Button { Content = "Open in browser", Padding = new Thickness(8, 2, 8, 2) };
@@ -236,9 +257,13 @@ public sealed class AutoAuditPanelView : UserControl
             // script injection — the web app talks to the AuditHub service
             // over HTTP exactly as it does in a normal browser tab.
             view.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            view.CoreWebView2.Navigate(_url);
+            // No Chromium "can't connect" page: a failed navigation lands in
+            // OnNavigationCompleted, which shows the waiting page and keeps probing.
+            view.CoreWebView2.Settings.IsBuiltInErrorPageEnabled = false;
+            view.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
 
             _fallback.Visibility = Visibility.Collapsed;
+            Connect("pane loaded");
         }
         catch (Exception ex)
         {
@@ -268,8 +293,143 @@ public sealed class AutoAuditPanelView : UserControl
         }
     }
 
+    // ── waiting for / starting the local service (jr fork) ─────────────────
+
+    /// <summary>
+    /// Probe the service; navigate when it answers, otherwise show the waiting page, start the
+    /// service (when configured) and poll until it answers. Runs on the UI thread; the probe
+    /// itself is async so Revit never blocks on a dead port.
+    /// </summary>
+    private async void Connect(string reason)
+    {
+        try
+        {
+            var view = _webView;
+            if (view?.CoreWebView2 is null || _suspended) return;
+            if (await LocalServiceLauncher.IsUpAsync(_url))
+            {
+                StopPolling();
+                _navigatingToService = true;
+                view.CoreWebView2.Navigate(_url);
+                return;
+            }
+            LogPanel($"{_label}: {_url} not answering ({reason}) — waiting page");
+            ShowWaiting(view);
+            _launcher?.TryStart(reason);
+            StartPolling();
+        }
+        catch (Exception ex)
+        {
+            LogPanel("connect: " + ex);
+        }
+    }
+
+    private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+    {
+        if (!_navigatingToService) return;        // the waiting page itself (NavigateToString)
+        _navigatingToService = false;
+        if (e.IsSuccess) return;
+        // Service went away under us (restart, crash, another Revit closed it): back to waiting.
+        LogPanel($"{_label}: navigation to {_url} failed ({e.WebErrorStatus}) — waiting page");
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            var view = _webView;
+            if (view?.CoreWebView2 is null || _suspended) return;
+            ShowWaiting(view);
+            _launcher?.TryStart($"navigation failed: {e.WebErrorStatus}");
+            StartPolling();
+        }));
+    }
+
+    private void StartPolling()
+    {
+        if (_poll is not null) return;
+        _pollTicks = 0;
+        _poll = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(1500),
+        };
+        _poll.Tick += async (_, _) =>
+        {
+            try
+            {
+                var view = _webView;
+                if (view?.CoreWebView2 is null || _suspended) { StopPolling(); return; }
+                if (await LocalServiceLauncher.IsUpAsync(_url))
+                {
+                    StopPolling();
+                    _navigatingToService = true;
+                    view.CoreWebView2.Navigate(_url);
+                    return;
+                }
+                _pollTicks++;
+                if (_pollTicks == 40)             // ~60 s: say so on the page, try the launcher once more
+                {
+                    _launcher?.TryStart("still down after 60 s");
+                    await SetWaitingStatus(view, _launcher is null
+                        ? $"Nothing is answering at {_url} yet."
+                        : $"Still starting… if this takes long, see {LocalServiceLauncher.LogPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogPanel("poll: " + ex);
+            }
+        };
+        _poll.Start();
+    }
+
+    private void StopPolling()
+    {
+        _poll?.Stop();
+        _poll = null;
+    }
+
+    private void ShowWaiting(WebView2 view)
+    {
+        try
+        {
+            _navigatingToService = false;
+            view.CoreWebView2.NavigateToString(WaitingHtml());
+        }
+        catch (Exception ex)
+        {
+            LogPanel("waiting page: " + ex);
+        }
+    }
+
+    private static async System.Threading.Tasks.Task SetWaitingStatus(WebView2 view, string text)
+    {
+        try
+        {
+            var js = "var s=document.getElementById('s'); if(s) s.textContent=" +
+                     System.Text.Json.JsonSerializer.Serialize(text) + ";";
+            await view.CoreWebView2.ExecuteScriptAsync(js);
+        }
+        catch
+        {
+            // Cosmetic only.
+        }
+    }
+
+    /// <summary>Self-contained waiting page: same dark surface as the pane, label, spinner, one status line.</summary>
+    private string WaitingHtml()
+    {
+        var label = System.Net.WebUtility.HtmlEncode(_label);
+        var waiting = System.Net.WebUtility.HtmlEncode(_waiting);
+        return "<!doctype html><html><head><meta charset='utf-8'><style>"
+             + "html,body{height:100%;margin:0;background:#1C2127;color:#E7EBF0;font:14px system-ui,Segoe UI,sans-serif}"
+             + "body{display:flex;align-items:center;justify-content:center;text-align:center}"
+             + ".sp{width:28px;height:28px;border:3px solid #3a4250;border-top-color:#E7EBF0;border-radius:50%;"
+             + "margin:0 auto 14px;animation:r 1s linear infinite}@keyframes r{to{transform:rotate(360deg)}}"
+             + "h1{font-size:16px;font-weight:600;margin:0 0 6px}#s{color:#9aa4b2;font-size:12px;margin-top:10px;min-height:1em}"
+             + "</style></head><body><div><div class='sp'></div><h1>" + label + "</h1><div>" + waiting
+             + "</div><div id='s'></div></div></body></html>";
+    }
+
     private void TearDownWebView()
     {
+        StopPolling();
         if (_webView is null) return;
         try
         {

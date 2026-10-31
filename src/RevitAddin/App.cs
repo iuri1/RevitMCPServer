@@ -217,7 +217,20 @@ public sealed class App : IExternalApplication
         var userDataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "RevitMCPAddin", "WebView2", "Extra", revitVersion);
-        _extraPanelView = new AutoAuditPanelView(settings.Url, userDataFolder, settings.Label);
+        // jr fork: "start" in revit-mcp-extra-panel.json = the add-in launches the local service
+        // behind the pane when Revit opens (hidden), so the pane never shows "can't connect".
+        // Fire-and-forget off the UI thread: a dead port must not slow Revit's startup.
+        LocalServiceLauncher? launcher = null;
+        if (settings.Start is not null)
+        {
+            launcher = new LocalServiceLauncher(settings.Start, settings.Url, settings.Label);
+            var l = launcher;
+            _ = System.Threading.Tasks.Task.Run(() => l.StartIfDownAsync("Revit startup"));
+            LogToConsole($"[RevitMCP] Extra panel '{settings.Label}': service start configured " +
+                         $"(\"{settings.Start.File}\" {settings.Start.Args}).");
+        }
+        _extraPanelView = new AutoAuditPanelView(
+            settings.Url, userDataFolder, settings.Label, launcher, settings.Waiting);
         application.RegisterDockablePane(
             ExtraPaneProvider.PaneId, settings.Label,
             new ExtraPaneProvider(_extraPanelView));
