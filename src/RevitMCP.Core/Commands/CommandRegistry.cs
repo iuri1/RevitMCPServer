@@ -152,5 +152,22 @@ public sealed class CommandRegistry
         Register(new GetPathsOfTravelCommand());
         Register(new CreatePathOfTravelCommand());
         Register(new CreateModelLineCommand());
+
+        // === JRTools routes ported to C# (Bis 2.0 pilot) ===
+        // Same names, argument names and payload as the pyRevit routes in Rotas.pushbutton/script.py,
+        // so bis_comum.rota can call them instead of the route without changing any caller.
+        Register(new CreateDraftingViewCommand());
+        Register(new SetViewScaleCommand());
+        Register(new SetViewportCentersCommand());
+        Register(new ViewportBoxesCommand());
+        Register(new PlaceScheduleOnSheetCommand());
+        Register(new RoomsBboxCommand());
+        Register(new RoomAreasCommand());
+        Register(new ElementBboxMCommand());
+        Register(new DimsListCommand());
+        Register(new SetAnnotationCropCommand());
+        Register(new RenameViewsCommand());
+        Register(new ListTextTypesCommand());
+        Register(new ListFilledRegionTypesCommand());
     }
 }

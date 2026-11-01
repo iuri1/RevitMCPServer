@@ -2,7 +2,7 @@
 /**
  * Revit MCP Server v0.8.35 (stdio).
  *
- * 94 tools covering diagnostics, inspection, creation, editing, family,
+ * 107 tools covering diagnostics, inspection, creation, editing, family,
  * transform, view manipulation, annotation, model health, batch operations, and coordination/clash detection.
  *
  * v0.8.0 additions:
@@ -47,7 +47,7 @@ const fwdWrite = (cmd: string) => async (params: Record<string, unknown>) => {
 };
 
 // ── Tool profiles (P2-A) ──────────────────────────────────────────────────────
-// With 94 tools, loading the whole catalog into every conversation wastes tokens
+// With 107 tools, loading the whole catalog into every conversation wastes tokens
 // and hurts tool-selection accuracy. Set REVIT_MCP_PROFILE to a comma-separated
 // list (e.g. "documentation,view") to expose only those groups; "core" is always
 // included. Unset = all tools (default, fully backward compatible).
@@ -69,6 +69,7 @@ const PROFILES: Record<string, string[]> = {
     "revit_get_linked_elements", "revit_get_element_geometry",
     "revit_get_view_image", "revit_get_element_rooms", "revit_get_schedule_data",
     "revit_get_doors",
+    "revit_rooms_bbox", "revit_room_areas", "revit_element_bbox_m",
   ],
   "model-health": ["revit_get_model_health", "revit_get_worksets"],
   recipes: ["revit_recipe_model_health_triage", "revit_recipe_clash_review"],
@@ -87,6 +88,10 @@ const PROFILES: Record<string, string[]> = {
     "revit_tag_element", "revit_tag_all_in_view", "revit_get_tags_in_view",
     "revit_create_text_note", "revit_export_view_pdf", "revit_duplicate_view",
     "revit_create_aligned_dimension", "revit_create_detail_line", "revit_create_filled_region",
+    "revit_create_drafting_view", "revit_set_view_scale", "revit_set_viewport_centers",
+    "revit_viewport_boxes", "revit_place_schedule_on_sheet", "revit_dims_list",
+    "revit_set_annotation_crop", "revit_rename_views", "revit_list_text_types",
+    "revit_list_filled_region_types",
   ],
   editing: [
     "revit_set_parameter", "revit_set_parameter_batch", "revit_update_where",
@@ -985,6 +990,91 @@ server.tool("revit_export_view_pdf",
       .describe("Color mode. Default 'Color'."),
   },
   fwd("export_view_pdf"));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JRTOOLS ROUTES PORTED TO C# (Bis 2.0 pilot)
+// Same argument names (snake_case) and payload as the pyRevit routes; metres outside.
+// Write tools accept tx_seguro: strict transaction (warnings dismissed, any error rolls back
+// WITHOUT a dialog; returns {status, falhas, resultado, resultado_descartado}).
+// ═══════════════════════════════════════════════════════════════════════════
+
+const viewIdsField = z.array(z.number().int()).min(1).describe("View ElementId values.");
+const txSeguroField = z.union([
+  z.boolean(),
+  z.object({
+    nome: z.string().optional().describe("Transaction name (undo entry)."),
+    resolver_contem: z.array(z.string()).optional()
+      .describe("Errors whose text contains one of these are resolved (max 3 passes); others roll back."),
+  }),
+]).optional().describe("Strict transaction: no Revit dialog, errors returned in 'falhas'. Default off.");
+
+server.tool("revit_create_drafting_view", "Create a drafting view with name and scale (1:scale). Returns {id, name, scale}.", {
+  name: z.string(),
+  scale: z.number().int().optional().describe("Default 10."),
+  tx_seguro: txSeguroField,
+  dryRun: dryRunField,
+}, fwdWrite("create_drafting_view"));
+
+server.tool("revit_set_view_scale", "Set the scale (1:scale) of views. Returns [{id, scale} | {id, error}].", {
+  view_ids: viewIdsField,
+  scale: z.number().int(),
+  tx_seguro: txSeguroField,
+  dryRun: dryRunField,
+}, fwdWrite("set_view_scale"));
+
+server.tool("revit_set_viewport_centers", "Move viewports so the drawing (not the title) is centred at x,y metres on the sheet.", {
+  items: z.array(z.object({ id: z.number().int(), x: z.number(), y: z.number() })).min(1),
+  tx_seguro: txSeguroField,
+  dryRun: dryRunField,
+}, fwdWrite("set_viewport_centers"));
+
+server.tool("revit_viewport_boxes", "Viewports of a sheet: drawing box (no title), size and centre in metres, sorted by left edge.", {
+  sheet_id: z.number().int(),
+}, fwd("viewport_boxes"));
+
+server.tool("revit_place_schedule_on_sheet", "Place a schedule on a sheet with its upper-left corner at x_m,y_m (metres). Returns {id, bbox_m}.", {
+  sheet_id: z.number().int(),
+  schedule_id: z.number().int(),
+  x_m: z.number(),
+  y_m: z.number(),
+  tx_seguro: txSeguroField,
+  dryRun: dryRunField,
+}, fwdWrite("place_schedule_on_sheet"));
+
+server.tool("revit_rooms_bbox", "Plan bounding box (metres) of the placed rooms of a level, optionally filtered by name.", {
+  level_name: z.string().describe("Exact level name."),
+  nomes_contem: z.array(z.string()).optional().describe("Keep rooms whose name contains any of these (case-insensitive)."),
+}, fwd("rooms_bbox"));
+
+server.tool("revit_room_areas", "Area (m², 2 decimals), name and level of rooms (all, or the given ids).", {
+  ids: z.array(z.number().int()).optional(),
+}, fwd("room_areas"));
+
+server.tool("revit_element_bbox_m", "Model bounding box (metres) per element id, plus wall_normal_deg for walls and hosted instances.", {
+  ids: idsField,
+}, fwd("element_bbox_m"));
+
+server.tool("revit_dims_list", "Dimensions of views: id, values in cm, direction (u/v) and position, to find duplicates.", {
+  view_ids: viewIdsField,
+}, fwd("dims_list"));
+
+server.tool("revit_set_annotation_crop", "Turn the annotation crop of views on/off and optionally set its offset (metres).", {
+  view_ids: viewIdsField,
+  active: z.boolean().optional().describe("Default true."),
+  offset_m: z.number().optional().describe("Annotation crop offset, all four sides. Default 0 (unchanged)."),
+  tx_seguro: txSeguroField,
+  dryRun: dryRunField,
+}, fwdWrite("set_annotation_crop"));
+
+server.tool("revit_rename_views", "Rename views; a taken name gets ' (2)', ' (3)'... Returns [{id, nome}].", {
+  items: z.array(z.object({ id: z.number().int(), nome: z.string() })).min(1),
+  tx_seguro: txSeguroField,
+  dryRun: dryRunField,
+}, fwdWrite("rename_views"));
+
+server.tool("revit_list_text_types", "Text note types: id, name, size_mm, color, sorted by name.", {}, fwd("list_text_types"));
+
+server.tool("revit_list_filled_region_types", "Sorted names of the filled region types.", {}, fwd("list_filled_region_types"));
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BATCH

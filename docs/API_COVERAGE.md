@@ -29,9 +29,9 @@ Claude Desktop / Claude Code.
 
 ## Current command surface (v0.8.35)
 
-**101 C# commands** registered (91 exposed as MCP tools + 10 hidden) across read, write, UI, and
+**114 C# commands** registered (104 exposed as MCP tools + 10 hidden) across read, write, UI, and
 coordination categories. With the batch transport tool and two Node-only workflow recipes
-(`recipe_model_health_triage`, `recipe_clash_review`), that is **94 MCP tools**.
+(`recipe_model_health_triage`, `recipe_clash_review`), that is **107 MCP tools**.
 
 The 10 hidden commands are registered in C# (HTTP-callable via `/mcp`) but deliberately off the MCP
 tool surface: `create_spot_elevation` (pending a reliable face-reference approach) and the

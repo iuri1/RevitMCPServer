@@ -27,7 +27,7 @@ API?"*, read [`docs/API_COVERAGE.md`](docs/API_COVERAGE.md).
 
 ## Status
 
-**v0.8.35** — 101 C# commands (91 exposed as MCP tools + 10 hidden) + 1 batch tool + 2 workflow recipes = **94 MCP tools**. Hidden = `create_spot_elevation` + the 9-command `spatial_*` HTTP pack, registered for HTTP `/mcp` use but off the MCP tool surface.
+**v0.8.35** — 114 C# commands (104 exposed as MCP tools + 10 hidden) + 1 batch tool + 2 workflow recipes = **107 MCP tools**. Hidden = `create_spot_elevation` + the 9-command `spatial_*` HTTP pack, registered for HTTP `/mcp` use but off the MCP tool surface.
 Supports **Revit 2025** (.NET 8), **Revit 2026** (.NET 8) and **Revit 2027** (.NET 10) with
 auto-port assignment for side-by-side use. Features: **dry-run mode**,
 **structured diffs**, **auth token**, **per-tool risk levels**, **Family &
@@ -52,7 +52,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 | Revit addin  | Revit 2027 / .NET 10      | ✅      |
 | MCP server   | Node 22 / TypeScript 5    | ✅      |
 
-## Tool surface (91 commands + 1 batch + 2 recipes = 94 MCP tools)
+## Tool surface (104 commands + 1 batch + 2 recipes = 107 MCP tools)
 
 ### Diagnostics (3)
 `revit_ping` | `revit_get_version` | `revit_get_document_info`
@@ -89,6 +89,10 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### View Manipulation (12 write / UI)
 `revit_open_view` | `revit_set_view_detail_level` | `revit_hide_elements_in_view` | `revit_unhide_elements_in_view` | `revit_select_elements` | `revit_zoom_to_elements` | `revit_apply_view_filter` | `revit_color_override_by_param` | `revit_override_element_graphics` | `revit_duplicate_view` | `revit_set_section_box` | `revit_isolate_elements_in_view`
+
+### JRTools routes ported to C# (13, Bis 2.0 pilot)
+Same names, snake_case arguments and payload as the pyRevit routes (metres outside); write tools take an optional `tx_seguro` (strict transaction, no Revit dialog). See [`docs/MIGRACAO_ROTAS_CSHARP.md`](docs/MIGRACAO_ROTAS_CSHARP.md).
+`revit_create_drafting_view` | `revit_set_view_scale` | `revit_set_viewport_centers` | `revit_viewport_boxes` | `revit_place_schedule_on_sheet` | `revit_rooms_bbox` | `revit_room_areas` | `revit_element_bbox_m` | `revit_dims_list` | `revit_set_annotation_crop` | `revit_rename_views` | `revit_list_text_types` | `revit_list_filled_region_types`
 
 ### Batch (1)
 `revit_batch` — run multiple commands inside ONE Revit Transaction (single undo entry).
@@ -165,7 +169,7 @@ take the MCP server down with it.
 
 ### Tool profiles (token efficiency)
 
-Exposing all 94 tools to every conversation costs tokens and degrades tool-selection
+Exposing all 107 tools to every conversation costs tokens and degrades tool-selection
 accuracy. Set the **`REVIT_MCP_PROFILE`** env var to a comma-separated list to expose only
 the groups you need; `core` (ping, doc/element info, find, batch) is always included.
 Unset = all tools (default, backward compatible).
@@ -173,12 +177,12 @@ Unset = all tools (default, backward compatible).
 | Profile | Tools | For |
 | ------- | ----- | --- |
 | `core` | 8 (always on) | ping, document/element info, find, batch |
-| `inspection` | 23 | `list_*` / `get_*` read-only queries (incl. schedule data, door swing) |
+| `inspection` | 27 | `list_*` / `get_*` read-only queries (incl. schedule data, door swing) |
 | `model-health` | 2 | `get_model_health`, `get_worksets` |
 | `recipes` | 2 | workflow recipes (model-health triage, clash review) |
 | `coordination` | 1 | `check_clearance` |
 | `architecture` | 10 | wall/floor/level/grid/room/column/beam/ceiling/opening/family |
-| `documentation` | 16 | sheets, views, schedules, tags, text, PDF, dimensions, detail lines, filled regions |
+| `documentation` | 27 | sheets, views, schedules, tags, text, PDF, dimensions, detail lines, filled regions |
 | `editing` | 17 | parameters, type swap, transform, delete, group, family load/duplicate |
 | `view` | 11 | open/hide/isolate/filter/override/section-box |
 
@@ -209,7 +213,7 @@ RevitMCPServer/
 │   ├── check-version.mjs           ← CI gate: version + tool-count consistency
 │   └── smoke-test.ps1              ← live-Revit smoke test
 └── src/
-    ├── RevitMCP.Core/              ← portable kernel: dispatcher + 101 commands
+    ├── RevitMCP.Core/              ← portable kernel: dispatcher + 114 commands
     │   ├── RevitMCPExternalEventHandler.cs
     │   └── Commands/               ← one IRevitCommand per tool
     ├── RevitAddin/                 ← C# addin host (in-Revit, .NET 8/10)
@@ -614,7 +618,7 @@ Two versions side-by-side (port auto-assigned):
 }
 ```
 
-Restart the client. You should see 94 `revit_*` tools per configured version.
+Restart the client. You should see 107 `revit_*` tools per configured version.
 
 ### 3. Try it
 

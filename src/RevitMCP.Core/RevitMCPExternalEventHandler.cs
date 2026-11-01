@@ -114,7 +114,25 @@ public sealed class RevitMCPExternalEventHandler : IExternalEventHandler
             return JsonResult.Error("unknown_command",
                 $"No command registered for '{commandName}'.");
 
+        // Optional per-call strict transaction ("tx_seguro", port of the JRTools route): the
+        // reserved key is taken out of the params before the command sees them.
+        TxSeguroOptions? txSeguro;
+        try
+        {
+            txSeguro = TxSeguroOptions.Extract(parameters, out parameters);
+        }
+        catch (RevitCommandException ex)
+        {
+            return JsonResult.Error(ex.Code, ex.Message);
+        }
+        if (txSeguro is not null && command.Execution != ExecutionKind.ModelWrite)
+            return JsonResult.Error("bad_request",
+                $"'tx_seguro' only applies to model-write commands; '{commandName}' is {command.Execution}.");
+
         var ctx = BuildContext(app, parameters, dryRun);
+
+        if (txSeguro is not null)
+            return RunSingleTxSeguro(ctx, command, commandName, txSeguro, dryRun);
 
         // Read-only and UI-action commands run WITHOUT a model transaction.
         if (command.Execution is ExecutionKind.ReadOnly or ExecutionKind.UiAction)
@@ -187,10 +205,69 @@ public sealed class RevitMCPExternalEventHandler : IExternalEventHandler
         }
     }
 
+    /// <summary>
+    /// Single write command inside a STRICT transaction (tx_seguro): warnings dismissed, any error
+    /// rolls back without a dialog, messages returned in 'falhas'. The payload has the exact shape
+    /// of the JRTools route tx_seguro: { status, falhas, resultado, resultado_descartado } — a
+    /// rollback is NOT an error envelope (ok stays true, status says "RolledBack"), just like the
+    /// route. An exception thrown by the command still rolls back and returns the error envelope.
+    /// </summary>
+    private static JsonObject RunSingleTxSeguro(
+        CommandContext ctx, IRevitCommand command, string commandName, TxSeguroOptions options, bool dryRun)
+    {
+        var doc = ctx.RequireDoc();
+        var state = new TxSeguroState(options);
+        using var tx = new Transaction(doc, options.Nome ?? $"MCP: {commandName}");
+        try
+        {
+            tx.Start();
+            TxSeguro.Install(tx, state);
+            var data = command.Execute(ctx);
+
+            string status;
+            if (dryRun)
+            {
+                if (tx.HasStarted() && !tx.HasEnded()) tx.RollBack();
+                status = "RolledBack";
+            }
+            else
+            {
+                status = tx.HasStarted() && !tx.HasEnded()
+                    ? tx.Commit().ToString()
+                    : tx.GetStatus().ToString();
+            }
+
+            var result = JsonResult.Success(state.BuildResponse(status, data));
+            if (dryRun)
+            {
+                result["dryRun"] = true;
+                result["committed"] = false;
+            }
+            return result;
+        }
+        catch (RevitCommandException ex)
+        {
+            try { if (tx.HasStarted() && !tx.HasEnded()) tx.RollBack(); } catch { }
+            return JsonResult.Error(ex.Code, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            try { if (tx.HasStarted() && !tx.HasEnded()) tx.RollBack(); } catch { }
+            return JsonResult.Error("command_failed", ex.Message, ex.GetType().FullName);
+        }
+    }
+
     private JsonObject RunBatch(UIApplication app, IList<BatchStep> steps, bool stopOnError, bool dryRun)
     {
         if (steps.Count == 0)
             return JsonResult.Error("bad_request", "Batch must contain at least one step.");
+
+        // tx_seguro is per single call: inside a batch every step shares ONE transaction, so a
+        // per-step strict mode cannot be honoured. Refuse instead of silently ignoring it.
+        for (var i = 0; i < steps.Count; i++)
+            if (steps[i].Parameters.ContainsKey(TxSeguroOptions.Key))
+                return JsonResult.Error("bad_request",
+                    $"Step {i} ('{steps[i].CommandName}'): 'tx_seguro' is not supported inside a batch; call the command on its own.");
 
         // Resolve all handlers up-front and verify they exist.
         var resolved = new List<(BatchStep step, IRevitCommand cmd)>(steps.Count);
