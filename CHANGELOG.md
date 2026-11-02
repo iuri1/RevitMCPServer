@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.35-jr6] — 2026-11-02: open_view closes the tabs it opened (Revit memory overnight)
+
+### Fixed
+
+- **Revit memory growing during long agent sessions.** Every `open_view` left the previous tab open, so a night of
+  work piled up hundreds of open views. `open_view` now remembers, per document, the views it opened itself and
+  closes the ones beyond the last `keepOpen` (default 3, counting the active one; `0` = never close). A view that
+  was already open when the agent activated it belongs to the user and is never closed. The response lists
+  `closedViews`. Policy in `OpenedViewsPolicy.cs` (pure, 4 unit tests).
+- Branch renamed `jr/preview-sem-pyrevit` -> `jr/bis-addin`: this is the add-in shipped with the normal Bis
+  (panel starts by itself + the C# routes, which only the no-pyRevit mode uses).
+
 ## [Unreleased] — piloto Bis 2.0: rotas JRTools em C# (branch `piloto-rotas-csharp`)
 
 ### Added

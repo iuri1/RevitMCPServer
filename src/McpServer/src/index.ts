@@ -707,8 +707,9 @@ server.tool("revit_ungroup_elements", "Ungroup a Group, returning its member ids
 // VIEW MANIPULATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-server.tool("revit_open_view", "Switch the active view.", {
+server.tool("revit_open_view", "Switch the active view. Tabs opened by this tool beyond the last keepOpen (default 3) are closed to save Revit memory; the user's own tabs are never closed.", {
   viewId: z.number().int(),
+  keepOpen: z.number().int().min(0).optional(),
   dryRun: dryRunField,
 }, fwdWrite("open_view"));
 
