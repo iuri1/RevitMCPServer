@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.35-jr7] — 2026-11-02: closedViews with the real id and name; UIView wrappers disposed
+
+### Fixed
+
+- `open_view` answered `closedViews: [-1]`: the id was read after `UIView.Close()`. It is now read before, and each
+  entry is `{viewId, name}` (QA 1.1.29-rc3, GOA model).
+- The `UIView` wrappers from `GetOpenUIViews()` (two per call) are disposed, so long sessions do not accumulate them.
+
 ## [0.8.35-jr6] — 2026-11-02: open_view closes the tabs it opened (Revit memory overnight)
 
 ### Fixed

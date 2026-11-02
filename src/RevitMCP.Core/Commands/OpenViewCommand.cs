@@ -28,7 +28,10 @@ public sealed class OpenViewCommand : IRevitCommand
         var view = doc.GetElement(viewId) as View
             ?? throw new RevitCommandException("not_found", $"View {viewId.Value} not found.");
 
-        var wasOpen = uiDoc.GetOpenUIViews().Any(u => u.ViewId == view.Id);
+        bool wasOpen;
+        var before = uiDoc.GetOpenUIViews();
+        try { wasOpen = before.Any(u => u.ViewId == view.Id); }
+        finally { foreach (var u in before) u.Dispose(); }
 
         uiDoc.ActiveView = view;
 
@@ -37,13 +40,21 @@ public sealed class OpenViewCommand : IRevitCommand
         var closed = new JsonArray();
         if (toClose.Count > 0)
         {
-            var active = uiDoc.ActiveView?.Id;
-            foreach (var u in uiDoc.GetOpenUIViews())
+            var active = uiDoc.ActiveView?.Id.Value;
+            var open = uiDoc.GetOpenUIViews();
+            try
             {
-                if (!toClose.Contains(u.ViewId.Value) || u.ViewId == active) continue;
-                try { u.Close(); closed.Add(u.ViewId.Value); }
-                catch (Autodesk.Revit.Exceptions.ApplicationException) { /* last open view or busy: leave it */ }
+                foreach (var u in open)
+                {
+                    // the id must be read BEFORE Close(): afterwards the UIView answers -1
+                    var id = u.ViewId.Value;
+                    if (!toClose.Contains(id) || id == active) continue;
+                    var name = (doc.GetElement(new ElementId(id)) as View)?.Name;
+                    try { u.Close(); closed.Add(new JsonObject { ["viewId"] = id, ["name"] = name }); }
+                    catch (Autodesk.Revit.Exceptions.ApplicationException) { /* last open view or busy: leave it */ }
+                }
             }
+            finally { foreach (var u in open) u.Dispose(); }
         }
 
         return new JsonObject
